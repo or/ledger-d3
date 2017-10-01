@@ -2,46 +2,26 @@
 import csv
 import json
 import io
+import os
 import subprocess
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+import sys
 
+import tornado.ioloop
+import tornado.web
 
-class RequestHandler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path.startswith('/data/'):
-            handled = self.generate_data(self.path.split('/', 2)[2])
-            if handled:
-                return
-
-        return super().do_GET()
-
-
-    def generate_data(self, path):
-        data = None
-        if path == 'assets.json':
-            data = query_assets()
-        else:
-            return False
-
-        self.send_response(200)
-        self.send_header('Content-type','text/json')
-        self.end_headers()
-
-        self.wfile.write(json.dumps(data).encode("utf8"))
-        return True
-
+from argparse import ArgumentParser
 
 def query_assets():
-    data = subprocess.check_output("ledger csv Assets", shell=True)
+    data = subprocess.check_output("ledger csv --sort date,-amount Assets", shell=True)
     reader = csv.reader(io.StringIO(data.decode("utf-8")))
     result = []
     for row in reader:
-        date, unused, name, account, currency, amount = row[:6]
+        date, unused, name, account, commodity, amount = row[:6]
         result.append({
             "date": date,
             "name": name,
             "account": account,
-            "currency": currency,
+            "commodity": commodity,
             "amount": amount,
         })
 
@@ -49,27 +29,77 @@ def query_assets():
 
 
 def query_expenses():
-    data = subprocess.check_output("ledger csv Expenses", shell=True)
+    data = subprocess.check_output("ledger csv --sort date,-amount Expenses", shell=True)
     reader = csv.reader(io.StringIO(data.decode("utf-8")))
     result = []
     for row in reader:
-        date, unused, name, account, currency, amount = row[:6]
+        date, unused, name, account, commodity, amount = row[:6]
         result.append({
             "date": date,
             "name": name,
             "account": account,
-            "currency": currency,
+            "commodity": commodity,
             "amount": amount,
         })
 
     return result
 
 
-def run():
-    server_address = ('127.0.0.1', 8081)
-    httpd = HTTPServer(server_address, RequestHandler)
-    print('running server...')
-    httpd.serve_forever()
+class DataHandler(tornado.web.RequestHandler):
+    def get(self, path):
+        data = None
+        if path == 'assets.json':
+            data = query_assets()
+        else:
+            self.set_status(404)
+            self.write("not found")
+            return
+
+        self.set_status(200)
+        self.set_header('Content-type','text/json')
+
+        self.write(json.dumps(data).encode("utf8"))
+
+    def post(self, path, *args, **kwargs):
+        print(path, args, kwargs)
 
 
-run()
+class StaticHandler(tornado.web.StaticFileHandler):
+    def parse_url_path(self, url_path):
+        if not url_path or url_path.endswith('/'):
+            url_path = url_path + 'index.html'
+
+        return url_path
+
+
+def make_app():
+    application = tornado.web.Application([
+        ('/data/(.*)', DataHandler),
+        ('/(.*)', StaticHandler, {'path': os.getcwd()}),
+    ], debug=True)
+
+    return application
+
+
+def start_server(port=8000):
+    app = make_app()
+    app.listen(port)
+    tornado.ioloop.IOLoop.instance().start()
+
+
+def parse_args(args=None):
+    parser = ArgumentParser()
+    parser.add_argument('-p', '--port', type=int, default=8000,
+                        help='Port on which to run server.')
+
+    return parser.parse_args(args)
+
+
+def main(args=None):
+    args = parse_args(args)
+    print('Starting server on port {}'.format(args.port))
+    start_server(port=args.port)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
