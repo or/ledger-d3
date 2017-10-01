@@ -16,6 +16,7 @@ function load() {
     var day = d3.timeFormat("%Y-%m-%d");
 
     var line = d3.line()
+        .curve(d3.curveBasis)
         .x(function(d) { return x(d.date); })
         .y(function(d) { return y(d.cumulative_sum); });
 
