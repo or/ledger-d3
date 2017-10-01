@@ -50,3 +50,15 @@ div.tooltip {
     display: none;
     shape-rendering: crispEdges;
 }
+
+.no-select {
+    cursor: default;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+.clickable {
+    cursor: pointer;
+}
