@@ -14,28 +14,52 @@ function load() {
     var optionLayer = svg.append("g").attr("class", "option-layer");
     var rawData = null;
     var data = null;
+    var requireFade = false;
 
     var x = d3.scaleTime();
     var y = d3.scaleLinear();
-    var xAxis, yAxis;
-    var gX, gY;
+
+    var xAxis = d3.axisBottom(x)
+        .ticks(d3.timeMonth.every(1))
+        .tickFormat(d3.timeFormat("%b %Y"));
+    var yAxis = d3.axisLeft(y);
+    var gX = svg
+        .append("g")
+        .attr("class", "axis axis-x");
+    var gY = svg.append("g")
+        .attr("class", "axis axis-y");
 
     var day = d3.timeFormat("%Y-%m-%d");
     var oldGraphIndex = null;
 
+    var t = d3.transition()
+        .duration(700)
+        .ease(d3.easeLinear);
+
+    function getYValue(d) {
+        if (optionIs("function", "cumulative")) {
+            return d.cumulative_sum;
+        } else {
+            return d.amount;
+        }
+    }
+
     var line = d3.line()
         .curve(d3.curveMonotone)
         .x(function(d) { return x(d.aggregatedDate); })
-        .y(function(d) { return y(d.cumulative_sum); });
+        .y(function(d) { return y(getYValue(d)); });
+
+    var lastZoomTransform = null;
 
     function zoomed() {
         graph.attr("transform", d3.event.transform);
 
+        lastZoomTransform = d3.event.transform;
         gX.call(xAxis.scale(d3.event.transform.rescaleX(x)));
         gY.call(yAxis.scale(d3.event.transform.rescaleY(y)));
     }
 
-    var minZoom = 0.1;
+    var minZoom = 0.5;
     var zoom = d3.zoom()
         .on("zoom", zoomed);
 
@@ -65,6 +89,7 @@ function load() {
             align: "left",
             value: "line",
             rebuildData: true,
+            requireFade: true,
             options: [
                 {name: "line", icon: "\uf201"},
                 {name: "bar", icon: "\uf1fe"},
@@ -78,6 +103,7 @@ function load() {
             align: "left",
             value: "day",
             rebuildData: true,
+            requireFade: true,
             options: [
                 {name: "day", icon: "\uf271"},
                 {name: "week", icon: "\uf271"},
@@ -91,9 +117,23 @@ function load() {
             align: "left",
             value: "smooth",
             rebuildData: false,
+            requireFade: true,
             options: [
                 {name: "raw", icon: "\uf272"},
                 {name: "smooth", icon: "\uf271"}
+            ]
+        },
+        {
+            x: 290,
+            y: 40,
+            name: "function",
+            align: "left",
+            value: "cumulative",
+            rebuildData: false,
+            requireFade: false,
+            options: [
+                {name: "relative", icon: "="},
+                {name: "cumulative", icon: "+"}
             ]
         },
     ];
@@ -111,10 +151,7 @@ function load() {
         var controls = optionLayer.append("g")
             .attr("class", "option-group")
             .attr("opacity", 0)
-            .attr("transform", function(d, i) {
-                return "translate(" + 1000 + ",0)";
-            })
-        ;
+            .attr("transform", "translate(" + optionGroup.x + "," + optionGroup.y + ")");
 
         var options = controls.selectAll('.option')
                 .data(optionGroup.options)
@@ -127,6 +164,7 @@ function load() {
                 })
                 .on("click", function(d, i) {
                     d.optionGroup.value = d.name;
+                    requireFade = d.optionGroup.requireFade;
                     if (d.optionGroup.rebuildData) {
                         graphObj.buildData();
                     }
@@ -200,6 +238,8 @@ function load() {
         svg.attr("width", width)
             .attr("height", height);
 
+        gY.attr("transform", "translate(" + width + " ,0)");
+
         graphObj.update();
     };
 
@@ -214,6 +254,7 @@ function load() {
 
     graphObj.buildData = function() {
         var nameMap = {};
+        var lastDate = null;
         rawData.forEach(function(d) {
             if (!(d.commodity in nameMap)) {
                 nameMap[d.commodity] = {
@@ -249,6 +290,19 @@ function load() {
             tmp.last.amount += d.amount;
             tmp.last.cumulative_sum = tmp.cumulative_sum;
             tmp.last.transactions.push(d);
+            lastDate = tmp.last.aggregatedDate;
+        });
+
+        Object.values(nameMap).forEach(function(d) {
+            if (d.last.aggregatedDate < lastDate) {
+                d.last = {
+                    aggregatedDate: lastDate,
+                    amount: 0,
+                    cumulative_sum: d.last.cumulative_sum,
+                    transactions: []
+                };
+                d.values.push(d.last);
+            }
         });
 
         data = Object.values(nameMap);
@@ -273,14 +327,10 @@ function load() {
         ];
         var yRange = [
             d3.min(data, function(d) {
-                return d3.min(d.values, function(e) {
-                    return e.cumulative_sum;
-                });
+                return d3.min(d.values, getYValue);
             }),
             d3.max(data, function(d) {
-                return d3.max(d.values, function(e) {
-                    return e.cumulative_sum;
-                });
+                return d3.max(d.values, getYValue);
             })
         ];
 
@@ -288,56 +338,50 @@ function load() {
         if (timelineWidth < width) {
             timelineWidth = width;
         }
-        x
-            .domain(xRange)
-            .range([0, timelineWidth]);
 
-        y
-            .domain(yRange)
-            .range([height, 0]);
+        x.domain(xRange).range([0, timelineWidth]);
+        y.domain(yRange).range([height, 0]);
 
         console.log(xRange, yRange, timelineWidth);
 
-        svg.selectAll("g.axis").remove();
-        xAxis = d3.axisBottom(x)
-            .ticks(d3.timeMonth.every(1))
-            .tickFormat(d3.timeFormat("%b %Y"));
-        yAxis = d3.axisLeft(y);
+        var zX = x;
+        var zY = y;
+        if (lastZoomTransform !== null) {
+            zX = lastZoomTransform.rescaleX(zX);
+            zY = lastZoomTransform.rescaleY(zY);
+        }
 
-        gX = svg.append("g")
-            .attr("class", "axis axis--x")
-            .call(xAxis);
-        gY = svg.append("g")
-            .attr("class", "axis axis--y")
-            .attr("transform", "translate(" + width + " ,0)")
-            .call(yAxis);
+        gX.transition(t).call(xAxis.scale(zX));
+        gY.transition(t).call(yAxis.scale(zY));
 
         zoom.scaleExtent([minZoom, 40])
-            .translateExtent([[(-10 - width) / minZoom, -100 / minZoom],
-                              [(timelineWidth + width + 10) / minZoom, (height + 100) / minZoom]]);
+            .translateExtent([[(-width - 100) / minZoom, -100 / minZoom],
+                              [(timelineWidth + width + 100) / minZoom, (height + 100) / minZoom]]);
 
         if (optionIs("smoothing", "smooth")) {
-            line.curve(d3.curveMonotone);
+            line.curve(d3.curveBasis);
         } else {
             line.curve(d3.curveLinear);
         }
 
-        var t = d3.transition()
-            .duration(700)
-            .ease(d3.easeLinear);
-
-        console.log("oldGraphIndex", oldGraphIndex);
-        if (oldGraphIndex !== null) {
-            graph
-                .selectAll(".line.line-" + oldGraphIndex)
-                .transition(t)
-                .attr("opacity", 0)
-                .remove();
-        } else {
-            oldGraphIndex = 1;
+        if (requireFade) {
+            if (oldGraphIndex !== null) {
+                graph
+                    .selectAll(".line.line-" + oldGraphIndex)
+                    .transition(t)
+                    .attr("opacity", 0)
+                    .remove();
+            }
         }
 
-        oldGraphIndex = 1 - oldGraphIndex;
+        if (oldGraphIndex === null) {
+            oldGraphIndex = 0;
+        } else {
+            if (requireFade) {
+                oldGraphIndex = 1 - oldGraphIndex;
+            }
+        }
+
         graph.selectAll(".line.line-" + oldGraphIndex)
             .data(data)
             .enter()
@@ -379,6 +423,8 @@ function load() {
         ;
 
         svg.call(zoom);
+
+        requireFade = false;
     };
 
     graphObj.onResize();
