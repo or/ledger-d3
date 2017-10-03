@@ -255,6 +255,16 @@ function load() {
         });
     };
 
+    function aggregateDate(x) {
+        if (optionIs("aggregation", "week")) {
+            return x.addDays(-(x.getDay() + 7 - 1) % 7);
+        } else if (optionIs("aggregation", "month")) {
+            return x.addDays(-x.getDate() + 1);
+        }
+
+        return x;
+    }
+
     graphObj.buildData = function() {
         var commodityMap = {};
         var lastX = null;
@@ -283,11 +293,7 @@ function load() {
                 maxX = x;
             }
 
-            if (optionIs("aggregation", "week")) {
-                x = d.date.addDays(-(d.date.getDay() + 7 - 1) % 7);
-            } else if (optionIs("aggregation", "month")) {
-                x = d.date.addDays(-d.date.getDate() + 1);
-            }
+            x = aggregateDate(x);
 
             var last = commodity.values.last();
             if (optionIs("aggregation", "none") ||
@@ -322,6 +328,44 @@ function load() {
             lastX = last.x;
         });
 
+        Object.values(commodityMap).forEach(function(commodity) {
+            if (commodity.values.length == 0) {
+                // should be impossible, as at least one element is added
+                return;
+            }
+
+            var x = commodity.values[0].x;
+            var i = 0;
+            while (x <= maxX) {
+                var aggregatedX = aggregateDate(x);
+                var foundOne = false;
+                while (i < commodity.values.length &&
+                       day(commodity.values[i].x) == day(aggregatedX)) {
+                    ++i;
+                    foundOne = true;
+                }
+
+                if (!foundOne) {
+                    var y = 0;
+                    var last = null;
+                    if (i > 0) {
+                        last = commodity.values[i - 1];
+                    }
+                    if (last !== null && optionIs("function", "cumulative")) {
+                        y = last.y;
+                    }
+                    commodity.values.splice(i, 0, {
+                        x: aggregatedX,
+                        y: y,
+                        transactions: []
+                    });
+
+                    ++i;
+                }
+                x = x.addDays(1);
+            }
+        });
+
         data = Object.values(commodityMap);
         console.log(data);
 
@@ -354,7 +398,6 @@ function load() {
         zoom.scaleExtent([minZoom, 40])
             .translateExtent([[(-width - 100) / minZoom, -100 / minZoom],
                               [(timelineWidth + width + 100) / minZoom, (height + 100) / minZoom]]);
-
     };
 
     graphObj.update = function() {
