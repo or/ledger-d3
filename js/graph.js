@@ -4,6 +4,15 @@ Date.prototype.addDays = function(days) {
     return dat;
 };
 
+if (!Array.prototype.last) {
+    Array.prototype.last = function() {
+        if (this.length == 0) {
+            return null;
+        }
+        return this[this.length - 1];
+    };
+};
+
 function load() {
     var width;
     var height;
@@ -36,18 +45,10 @@ function load() {
         .duration(700)
         .ease(d3.easeLinear);
 
-    function getYValue(d) {
-        if (optionIs("function", "cumulative")) {
-            return d.cumulative_sum;
-        } else {
-            return d.amount;
-        }
-    }
-
     var line = d3.line()
         .curve(d3.curveMonotone)
-        .x(function(d) { return x(d.aggregatedDate); })
-        .y(function(d) { return y(getYValue(d)); });
+        .x(function(d) { return x(d.x); })
+        .y(function(d) { return y(d.y); });
 
     var lastZoomTransform = null;
 
@@ -62,6 +63,7 @@ function load() {
     var minZoom = 0.5;
     var zoom = d3.zoom()
         .on("zoom", zoomed);
+    svg.call(zoom);
 
     var div = d3.select("body").append("div")
         .attr("class", "tooltip")
@@ -105,6 +107,7 @@ function load() {
             rebuildData: true,
             requireFade: true,
             options: [
+                {name: "none", icon: "="},
                 {name: "day", icon: "\uf271"},
                 {name: "week", icon: "\uf271"},
                 {name: "month", icon: "\uf272"}
@@ -129,7 +132,7 @@ function load() {
             name: "function",
             align: "left",
             value: "cumulative",
-            rebuildData: false,
+            rebuildData: true,
             requireFade: false,
             options: [
                 {name: "relative", icon: "="},
@@ -253,86 +256,80 @@ function load() {
     };
 
     graphObj.buildData = function() {
-        var nameMap = {};
-        var lastDate = null;
+        var commodityMap = {};
+        var lastX = null;
+        var minX = null, maxX = null;
+
         rawData.forEach(function(d) {
-            if (!(d.commodity in nameMap)) {
-                nameMap[d.commodity] = {
+            if (!(d.commodity in commodityMap)) {
+                commodityMap[d.commodity] = {
                     key: d.commodity,
-                    cumulative_sum: 0,
-                    last: null,
+                    minY: null,
+                    maxY: null,
+                    running_sum: 0,
                     values: []
                 };
             }
-            var tmp = nameMap[d.commodity];
+            var commodity = commodityMap[d.commodity];
 
             d.date = new Date(d.date);
-
-            var aggregatedDate = d.date;
-            if (optionIs("aggregation", "week")) {
-                aggregatedDate = d.date.addDays(-(d.date.getDay() + 7 - 1) % 7);
-            } else if (optionIs("aggregation", "month")) {
-                aggregatedDate = d.date.addDays(-d.date.getDate() + 1);
-            }
-
-            if (tmp.last == null || day(tmp.last.aggregatedDate) != day(aggregatedDate)) {
-                tmp.last = {
-                    aggregatedDate: aggregatedDate,
-                    amount: 0,
-                    cumulative_sum: 0,
-                    transactions: []
-                };
-                tmp.values.push(tmp.last);
-            }
-
             d.amount = parseFloat(d.amount);
-            tmp.cumulative_sum += d.amount;
-            tmp.last.amount += d.amount;
-            tmp.last.cumulative_sum = tmp.cumulative_sum;
-            tmp.last.transactions.push(d);
-            lastDate = tmp.last.aggregatedDate;
-        });
 
-        Object.values(nameMap).forEach(function(d) {
-            if (d.last.aggregatedDate < lastDate) {
-                d.last = {
-                    aggregatedDate: lastDate,
-                    amount: 0,
-                    cumulative_sum: d.last.cumulative_sum,
+            var x = d.date;
+            if (minX === null || x < minX) {
+                minX = x;
+            }
+            if (maxX === null || x > maxX) {
+                maxX = x;
+            }
+
+            if (optionIs("aggregation", "week")) {
+                x = d.date.addDays(-(d.date.getDay() + 7 - 1) % 7);
+            } else if (optionIs("aggregation", "month")) {
+                x = d.date.addDays(-d.date.getDate() + 1);
+            }
+
+            var last = commodity.values.last();
+            if (optionIs("aggregation", "none") ||
+                last === null ||
+                day(last.x) != day(x)) {
+
+                var y = 0;
+                if (last !== null && optionIs("function", "cumulative")) {
+                    y = last.y;
+                }
+
+                last = {
+                    x: x,
+                    y: y,
                     transactions: []
                 };
-                d.values.push(d.last);
+                commodity.values.push(last);
             }
+
+            last.y += d.amount;
+            last.transactions.push(d);
+
+            commodity.running_sum += d.amount;
+
+            if (commodity.minY === null || commodity.running_sum < commodity.minY) {
+                commodity.minY = commodity.running_sum;
+            }
+            if (commodity.maxY === null || commodity.running_sum > commodity.maxY) {
+                commodity.maxY = commodity.running_sum;
+            }
+
+            lastX = last.x;
         });
 
-        data = Object.values(nameMap);
-    };
+        data = Object.values(commodityMap);
+        console.log(data);
 
-    graphObj.update = function() {
-        if (data === null) {
-            return;
-        }
-
-        var xRange = [
-            d3.min(data, function(d) {
-                return d3.min(d.values, function(e) {
-                    return e.aggregatedDate;
-                });
-            }),
-            d3.max(data, function(d) {
-                return d3.max(d.values, function(e) {
-                    return e.aggregatedDate;
-                });
-            })
-        ];
-        var yRange = [
-            d3.min(data, function(d) {
-                return d3.min(d.values, getYValue);
-            }),
-            d3.max(data, function(d) {
-                return d3.max(d.values, getYValue);
-            })
-        ];
+        // TODO: this will be based on exchange rates to the selected base curency
+        var minY = commodityMap["ZAR"].minY;
+        var maxY = commodityMap["ZAR"].maxY;
+        var xRange = [minX, maxX];
+        var yRange = [minY, maxY];
 
         var timelineWidth = (xRange[1] - xRange[0]) / 24 / 60 / 60 / 1000;
         if (timelineWidth < width) {
@@ -357,6 +354,13 @@ function load() {
         zoom.scaleExtent([minZoom, 40])
             .translateExtent([[(-width - 100) / minZoom, -100 / minZoom],
                               [(timelineWidth + width + 100) / minZoom, (height + 100) / minZoom]]);
+
+    };
+
+    graphObj.update = function() {
+        if (data === null) {
+            return;
+        }
 
         if (optionIs("smoothing", "smooth")) {
             line.curve(d3.curveBasis);
@@ -421,8 +425,6 @@ function load() {
                 return "#d0d0d0";
             })
         ;
-
-        svg.call(zoom);
 
         requireFade = false;
     };
